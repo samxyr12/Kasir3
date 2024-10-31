@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Penerima Data Barang</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            padding: 20px;
+        }
+
+        .status-indicator {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f4f4f4;
+        }
+
+        .category-header {
+            background-color: #e9ecef;
+            font-weight: bold;
+            text-align: center;
+        }
+
+        #qrCodeContainer {
+            text-align: center;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Penerima Data Barang</h1>
+    
+    <div id="connectionStatus" class="status-indicator disconnected">
+        Status: Tidak terhubung
+    </div>
+
+    <div id="qrCodeContainer">
+        <div id="qrcode"></div>
+        <p id="serverUrl"></p>
+    </div>
+
+    <table id="tabelBarang">
+        <thead>
+            <tr>
+                <th>Kategori</th>
+                <th>Kode Toko</th>
+                <th>Kode Barang</th>
+                <th>PLU</th>
+                <th>Nama Barang</th>
+                <th>Harga Beli</th>
+                <th>Harga Jual</th>
+                <th>Stok</th>
+                <th>Terjual</th>
+                <th>Profit</th>
+                <th>% Penjualan</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    
+    <script>
+        let socket;
+
+        function formatRupiah(angka) {
+            return new Intl.NumberFormat('id-ID', {
+                style: 'currency',
+                currency: 'IDR'
+            }).format(angka);
+        }
+
+        function updateConnectionStatus(connected) {
+            const statusDiv = document.getElementById('connectionStatus');
+            statusDiv.className = `status-indicator ${connected ? 'connected' : 'disconnected'}`;
+            statusDiv.textContent = `Status: ${connected ? 'Terhubung' : 'Tidak terhubung'}`;
+        }
+
+        function updateTable(data) {
+            const tbody = document.querySelector('#tabelBarang tbody');
+            tbody.innerHTML = '';
+
+            // Group items by category
+            const kategoriKelompok = {};
+            data.forEach(item => {
+                const kategori = item.kategori || 'Uncategorized';
+                if (!kategoriKelompok[kategori]) {
+                    kategoriKelompok[kategori] = [];
+                }
+                kategoriKelompok[kategori].push(item);
+            });
+
+            // Define category order
+            const urutanKategori = ['A1', 'A2', 'A3', 'A4', 'A5', 'B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'Uncategorized'];
+
+            urutanKategori.forEach(kategori => {
+                if (kategoriKelompok[kategori] && kategoriKelompok[kategori].length > 0) {
+                    // Add category header
+                    const headerRow = tbody.insertRow();
+                    const headerCell = headerRow.insertCell(0);
+                    headerCell.colSpan = 11;
+                    headerCell.innerHTML = `<strong>Kategori: ${kategori}</strong>`;
+                    headerCell.className = 'category-header';
+
+                    // Add items in this category
+                    kategoriKelompok[kategori].forEach(item => {
+                        const row = tbody.insertRow();
+                        const cells = [
+                            '',
+                            item.kodeToko || '',
+                            item.kode || '',
+                            item.plu || '',
+                            item.nama || '',
+                            formatRupiah(item.hargaBeli || 0),
+                            formatRupiah(item.hargaJual || 0),
+                            item.stok || 0,
+                            item.terjual || 0,
+                            formatRupiah((item.hargaJual - item.hargaBeli) * (item.terjual || 0)),
+                            `${item.stok > 0 ? ((item.terjual || 0) / item.stok * 100).toFixed(2) : 0}%`
+                        ];
+
+                        cells.forEach(cellValue => {
+                            row.insertCell().innerText = cellValue;
+                        });
+                    });
+                }
+            });
+        }
+
+        function initializeSocket() {
+            // Get local IP from window.location
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const host = window.location.hostname;
+            const port = '3000'; // Default port for Socket.IO
+            const serverUrl = `${protocol}//${host}:${port}`;
+            
+            // Initialize Socket.IO
+            socket = io(serverUrl);
+
+            socket.on('connect', () => {
+                updateConnectionStatus(true);
+                console.log('Connected to server');
+            });
+
+            socket.on('disconnect', () => {
+                updateConnectionStatus(false);
+                console.log('Disconnected from server');
+            });
+
+            socket.on('updateData', (message) => {
+                if (message.type === 'updateData') {
+                    updateTable(message.data);
+                }
+            });
+
+            // Display server URL and generate QR Code
+            document.getElementById('serverUrl').textContent = `Server URL: ${serverUrl}`;
+            new QRCode(document.getElementById("qrcode"), serverUrl);
+        }
+
+        // Start connection when page loads
+        document.addEventListener('DOMContentLoaded', initializeSocket);
+    </script>
+</body>
+</html>
